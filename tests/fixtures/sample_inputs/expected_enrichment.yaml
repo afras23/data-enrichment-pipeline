@@ -1,0 +1,18 @@
+# Soft expectations for offline evaluation reports (not strict golden files).
+# Match is by exact company_name as listed in companies.yaml.
+
+expectations:
+  - company_name: "Eval Full Co"
+    record_status: completed
+    min_final_score: 0.35
+    min_completeness: 0.5
+    ai_industry_not_null: true
+
+  - company_name: "Eval Thin Co"
+    record_status: completed
+    max_final_score: 0.95
+    notes: "Thin scrape keeps evidence_strength bounded; scores stay below a high ceiling."
+
+  - company_name: "Eval NoSite ZZZ"
+    record_status: partial
+    ai_industry_not_null: false

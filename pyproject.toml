@@ -4,6 +4,19 @@ version = "0.1.0"
 description = "Company enrichment batch pipeline (scaffold)"
 requires-python = ">=3.12"
 readme = "README.md"
+dependencies = [
+    "fastapi==0.115.6",
+    "uvicorn[standard]==0.32.1",
+    "pydantic==2.10.3",
+    "pydantic-settings==2.6.1",
+    "httpx==0.28.1",
+    "sqlalchemy[asyncio]==2.0.36",
+    "asyncpg==0.30.0",
+    "alembic==1.14.0",
+    "beautifulsoup4==4.12.3",
+    "openai==1.57.4",
+    "pyyaml==6.0.2",
+]
 
 [tool.ruff]
 target-version = "py312"

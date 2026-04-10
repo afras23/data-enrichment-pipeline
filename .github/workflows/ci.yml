@@ -54,13 +54,13 @@ jobs:
           pip install -r requirements-dev.txt
 
       - name: Lint
-        run: ruff check app/ tests/
+        run: ruff check app/ tests/ eval/
 
       - name: Format check
-        run: ruff format --check app/ tests/
+        run: ruff format --check app/ tests/ eval/
 
       - name: Type check
-        run: mypy app/ --ignore-missing-imports
+        run: mypy app/ eval/ --ignore-missing-imports
 
       - name: Test
         run: |
