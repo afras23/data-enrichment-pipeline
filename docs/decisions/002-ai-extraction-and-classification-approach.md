@@ -57,6 +57,12 @@ Use **Option A** as default: **one structured extraction call per company** afte
 
 **Prompt rules:** System prompt defines role, safety, and “do not invent”; user prompt includes **only** concatenated snippets with source tags; never intermix instructions from page content (playbook alignment).
 
+## Implementation note (current codebase)
+
+- **`AIEnrichmentResult`** (`app/schemas/domain.py`) uses **validated** fields: `company_size_band` is restricted to a fixed set of labels; `industry` is a **string** (not a strict taxonomy enum in code—tightening to an enum remains a future improvement).
+- **Prompt version** `company_enrichment_v1` and model from **`settings.openai_model`** are persisted on each record.
+- **Repair retry** for malformed JSON may be extended in `OpenAIEnrichmentClient`; rows that fail validation surface as enrichment errors.
+
 ## Consequences
 
 - **Positive:** One place to version (`company_enrichment_v1`); easier evaluation; clear cost per company.

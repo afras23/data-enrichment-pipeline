@@ -60,7 +60,17 @@ Adopt **Option C (tiered policies + circuit breaker)** with these defaults (exac
 **Run-level behaviour**
 
 - A **single company failure** does not fail the entire batch unless configured; counters increment `failed` jobs.
-- **Cost limit:** when `max_daily_cost_usd` would be exceeded, stop scheduling new LLM calls; run status `cost_limited`; jobs not yet processed remain **pending** or **cancelled** per explicit policy (pick one in implementation and document).
+- **Cost limit:** stop **new** LLM calls when the **per-run** cumulative cost would exceed `max_cost_per_run_usd` (see `Settings.max_cost_per_run_usd`). Run status becomes **`partial`** or **`failed`** depending on whether any rows succeeded; affected rows fail with a **cost limit** error code.
+
+## Implementation note (current codebase)
+
+The repository implements **clear terminal states** and **mock-friendly** HTTP/OpenAI clients for tests. **Not every** ADR detail is fully realised in v1:
+
+- **HTTP:** `WebFetchClient` centralises fetches; discovery tries candidates sequentially and skips failed probes. **Full** exponential backoff, per-host circuit breakers, and rich retry matrices may be extended here without changing the pipeline contract—see `app/integrations/web_client.py`.
+- **OpenAI:** `OpenAIEnrichmentClient` handles timeouts and maps failures to `EnrichmentAIError`; schema validation failures surface as enrichment errors.
+- **Pipeline:** `EnrichmentPipelineService` applies **pre- and post-AI** cost checks against **`max_cost_per_run_usd`** (not a separate daily cap unless added to settings later).
+
+For day-to-day behaviour and tuning, see **`docs/runbook.md`**.
 
 ## Consequences
 

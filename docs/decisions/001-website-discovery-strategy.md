@@ -44,16 +44,23 @@ Search API produces candidates; a **small** LLM step re-ranks or explains best m
 - **Pro:** Better precision than raw search alone; LLM constrained to provided URLs.
 - **Con:** Additional LLM cost and latency; more moving parts.
 
-## Decision
+## Decision (strategic)
 
-Adopt **Option A (Search API + ranking heuristics)** as the **primary** strategy for v1, with **Option B** as a **fallback** when search is disabled or returns no confident result (config flag). **Do not** use Option C as a primary path.
+The **target** architecture is **Option A (search-assisted discovery)** with **Option B (heuristic probes)** as a **fallback** when search is unavailable or returns no confident candidate. **Option C (LLM-only URL inference)** remains **out of scope** as a primary path.
 
-Ranking features (non-exhaustive): normalised name similarity, presence of company name in title/description, domain age signals if available without heavy dependencies, HTTPS, and penalisation of obvious aggregators (LinkedIn, Crunchbase) unless no alternative exists—exact rules live in code and settings.
+## Implementation (current codebase)
 
-If a search API is **not** configured in a given deployment, the system falls back to **Option B** explicitly and records `discovery_source=heuristic` for quality scoring transparency.
+The shipped service implements **Option B only** (`WebsiteDiscoveryService` in `app/services/website_discovery.py`):
+
+- Derive a **slug** from the company name (`normalize_company_key`).
+- Probe **`https://www.{slug}.com/`**, **`https://{slug}.com/`**, then **`.io`** variants (order influenced by `DISCOVERY_TRY_WWW`).
+- Accept the first response that **looks like HTML** with a successful status; attach **confidence** (e.g. higher when the resolved URL uses `www`).
+- Persist **`candidates_tried`** and notes in `discovery_metadata` on the enrichment record.
+
+A **search API** integration remains a **future improvement**; until then, discovery is fully **mockable** over HTTP for tests and evaluation.
 
 ## Consequences
 
-- **Positive:** Better real-world recall than pure guessing; auditable candidate lists; clear separation between “no website found” and “website found but low confidence.”
-- **Negative:** Requires a search API key and compliance with provider ToS; tests must mock search responses; CI must not call live search.
-- **Follow-up (out of scope unless scheduled):** optional **Option D** as a precision pass when search returns multiple close candidates.
+- **Positive:** No third-party search dependency in the default build; simple CI; predictable behaviour for portfolio demos.
+- **Negative:** Lower recall on brands whose domains do not match the slug heuristic; operators rely on **website_confidence** and **partial** states when no candidate works.
+- **Follow-up:** Add Option A behind configuration; optional Option D-style re-ranking among search candidates.

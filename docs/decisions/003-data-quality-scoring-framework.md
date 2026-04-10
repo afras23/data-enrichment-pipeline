@@ -50,17 +50,18 @@ Deterministic function of:
 
 ## Decision
 
-Implement **Option C (hybrid composite score)** with **explicit subscores** stored alongside the final score:
+Implement **Option C (hybrid composite score)** with **explicit subscores** stored alongside the final score.
 
-| Subscore | Meaning (illustrative) |
-|----------|-------------------------|
-| `discovery` | Normalised confidence from URL selection |
-| `scrape` | Success of fetch + sufficient clean text |
-| `completeness` | Share of populated priority fields |
-| `consistency` | Schema and business-rule passes |
-| `penalty` | Aggregated down-weights (e.g. low discovery, scrape errors, many nulls) |
+**Implemented subscores** (`QualitySubscores` in `app/schemas/domain.py`, computed in `QualityScoringService`):
 
-Final `quality_score` is a **weighted sum** in **[0, 1]**, configured via settings (e.g. completeness 0.35, scrape 0.25, discovery 0.25, consistency 0.15—exact defaults set in implementation).
+| Subscore | Meaning |
+|----------|---------|
+| `completeness` | Share of populated AI fields (six checks) |
+| `evidence_strength` | Derived from visible text length, page count, fetch errors |
+| `consistency` | Overlap between scraped text and industry/tech tokens |
+| `website_confidence` | Discovery confidence, clamped to `[0, 1]` |
+
+Final **`final_score`** is a **weighted sum** in **[0, 1]** with fixed code weights: **0.30** completeness + **0.30** evidence + **0.25** consistency + **0.15** website confidence (see `app/services/quality_scoring.py`). Tuning today requires a code change; moving weights to **`Settings`** is a possible follow-up.
 
 **Thresholds:** configurable `quality_pass_threshold` for tagging rows as **“high confidence”** vs **“needs review”** in API responses—without requiring a full review UI in scope.
 

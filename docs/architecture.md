@@ -2,134 +2,156 @@
 
 ## Overview
 
-This system is a **batch-oriented enrichment pipeline** exposed through a **FastAPI** service. Given company names, it **discovers websites**, **scrapes public HTML** with **BeautifulSoup**, calls the **OpenAI API** to **extract and classify** structured firmographics, computes a **data quality score**, and **persists** runs and per-company results in **PostgreSQL**.
+This system is a **batch-oriented enrichment pipeline** exposed through a **FastAPI** service. Given company names, it **discovers websites** (heuristic HTTP probes), **scrapes public HTML** with **BeautifulSoup**, calls the **OpenAI API** to **extract and classify** structured firmographics, computes a **composite data quality score**, and **persists** runs and per-company results in **PostgreSQL** (or **SQLite** for development and tests).
 
 ## Goals (in scope)
 
-- End-to-end flow: **name → URL candidates → scrape → LLM structured output → quality score → stored enriched record**.
-- **Async I/O** for HTTP and database; **synchronous** BeautifulSoup parsing on fetched HTML (CPU-bound, bounded worker pool or inline with size limits).
-- **Configuration** via environment variables (Pydantic Settings); **no secrets in code**.
-- **Observability:** correlation IDs, structured logging, health/ready/metrics.
+- End-to-end flow: **name → URL discovery → multi-page scrape → LLM structured output → quality score → stored enriched record**.
+- **Async I/O** for HTTP and database; **CPU-bound** HTML parsing runs on the event loop with bounded input sizes.
+- **Configuration** via environment variables (`pydantic-settings`); **no secrets in code**.
+- **Observability:** correlation IDs, structured logging, health/ready/metrics endpoints.
 
-## System Diagram
+## System context
 
 ```mermaid
 flowchart TB
     subgraph clients [Clients]
-        CLI[CLI / curl / future UI]
+        C[curl / scripts / future UI]
     end
 
-    subgraph api [FastAPI - api v1]
-        MW[Correlation + error middleware]
-        R_Batch[Batch routes]
-        R_Health[Health metrics routes]
-    end
-
-    subgraph services [Services]
-        PS[Pipeline orchestration service]
-        WD[Website discovery service]
-        SC[Scrape and extract text service]
-        AI[Enrichment AI service]
-        QS[Quality scoring service]
-    end
-
-    subgraph integrations [Integrations]
-        HTTP[httpx async client]
-        OAI[OpenAI client wrapper]
-    end
-
-    subgraph data [Data]
-        PG[(PostgreSQL)]
+    subgraph svc [data-enrichment-pipeline]
+        API[FastAPI /api/v1]
+        PS[EnrichmentPipelineService]
+        WD[WebsiteDiscoveryService]
+        SC[SiteScraperService]
+        AI[OpenAIEnrichmentClient]
+        QS[QualityScoringService]
+        DB[(PostgreSQL / SQLite)]
     end
 
     subgraph external [External]
-        WEB[Target company websites]
-        OAPI[OpenAI API]
+        WEB[Company websites]
+        OAI[OpenAI API]
     end
 
-    CLI --> MW --> R_Batch
-    MW --> R_Health
-    R_Batch --> PS
+    C --> API
+    API --> PS
     PS --> WD
-    WD --> HTTP
-    HTTP --> WEB
+    WD --> WEB
     PS --> SC
-    SC --> HTTP
-    SC --> PS
+    SC --> WEB
     PS --> AI
     AI --> OAI
-    OAI --> OAPI
-    AI --> PS
     PS --> QS
-    QS --> PS
-    PS --> PG
-    R_Health --> PG
-    R_Health --> OAI
+    PS --> DB
+    API --> DB
 ```
 
-## Component Responsibilities
+## Detailed pipeline (single company)
+
+This diagram matches the **implemented** orchestration in `app/services/enrichment_pipeline.py`:
+
+```mermaid
+sequenceDiagram
+    participant API as API / background task
+    participant P as EnrichmentPipelineService
+    participant D as WebsiteDiscoveryService
+    participant W as WebFetchClient
+    participant S as SiteScraperService
+    participant H as html_extraction
+    participant O as OpenAIEnrichmentClient
+    participant Q as QualityScoringService
+    participant R as EnrichmentRepository / DB
+
+    API->>P: process_run(run_id, company_names[])
+    loop Per company (semaphore-limited concurrency)
+        P->>R: INSERT record PENDING
+        P->>D: discover(company_name)
+        D->>W: fetch(candidate URLs)
+        W-->>D: HTML / errors
+        alt No resolvable website
+            P->>R: UPDATE PARTIAL + error
+        else Website found
+            P->>S: scrape_site(url)
+            S->>W: fetch(home + linked pages)
+            W-->>S: HTML
+            S->>H: extract_page_signals
+            alt No pages / scrape failure
+                P->>R: UPDATE PARTIAL + error
+            else Bundle OK
+                P->>P: cost limit check (pre-AI)
+                P->>O: enrich_company(name, text, hints)
+                O-->>P: AIEnrichmentResult + metrics
+                P->>P: cost limit check (post-AI)
+                P->>Q: build_report(...)
+                Q-->>P: QualityReport
+                P->>R: UPDATE COMPLETED + payloads
+            end
+        end
+    end
+    P->>R: UPDATE run totals + status
+```
+
+**Run-level status** (`EnrichmentRun`): `pending` → `running` → `completed` | `failed` | `partial` (some rows failed or partial).
+
+**Record-level status** (`EnrichmentRecord`): `pending` → `completed` | `partial` | `failed` (including cost limit failures).
+
+## Component responsibilities
 
 | Layer | Responsibility |
 |-------|----------------|
-| **Routes** | Validate requests; attach correlation id; delegate to services; return Pydantic responses. |
-| **Pipeline service** | Orchestrates stages per company; applies retries at orchestration level; writes row-level outcomes. |
-| **Website discovery** | From company name, produce ranked URL candidate(s) with signals and confidence (see ADR 001). |
-| **Scrape service** | Fetch pages with timeouts/redirect limits; parse visible text and metadata with BeautifulSoup; cap bytes and depth. |
-| **Enrichment AI service** | Versioned prompts; OpenAI structured output → Pydantic validation; token/cost logging. |
-| **Quality scoring** | Deterministic score from field completeness, consistency, source coverage (see ADR 003). |
-| **Repositories** | All SQL through async SQLAlchemy; migrations via Alembic. |
+| **Routes** (`app/api/routes/`) | Validate requests; schedule `process_run` in background; paginated list/detail endpoints. |
+| **Pipeline service** | Semaphore-limited concurrency; per-row processing; cost accounting; run aggregates; optional alerting. |
+| **Website discovery** | From company name, probe `{slug}.com` / `.io` with `www` variants; return URL + confidence + candidates tried (ADR 001). |
+| **Site scraper** | Homepage + nav-linked about/contact/careers/privacy; aggregate `ScrapedSiteBundle`. |
+| **HTML extraction** | Deterministic signals: title, meta, headings, emails, phones, JSON-LD, tech hints. |
+| **OpenAI client** | Versioned prompts; JSON → `AIEnrichmentResult`; token/cost/latency (ADR 002). |
+| **Quality scoring** | Completeness, evidence strength, consistency, website confidence → `final_score` (ADR 003). |
+| **Repositories** | Async SQLAlchemy; tables `enrichment_runs`, `enrichment_records` (ADR 004). |
 
-## Data Flow (Single Company)
+## Data model (implemented)
 
-1. **Ingest:** Batch request creates a `pipeline_run` and N `company_jobs` rows (idempotent per run + normalised name key where applicable).
-2. **Discover:** Website discovery returns primary URL + confidence; persist candidate list and chosen URL.
-3. **Fetch:** Scraper requests allowlisted paths (home, `/about`, `/contact`, etc.—configurable); aggregates text snippets with source labels.
-4. **Enrich:** OpenAI returns JSON matching `EnrichedCompany` schema (industry, size band, tech tags, contacts); validate strictly.
-5. **Score:** Quality scorer consumes enriched fields + scrape metadata + discovery confidence; produces numeric score + subscores.
-6. **Persist:** Final row status `completed` or `failed`/`partial` with error code and audit fields (model, prompt version, token usage).
+- **`enrichment_runs`:** batch metadata, status, counts, `total_ai_cost_usd`, timestamps.
+- **`enrichment_records`:** per company, `normalized_name_key`, discovery/scrape/AI/quality JSON payloads, error fields, model telemetry.
 
-## Failure Paths (External Dependencies)
+See migration `migrations/versions/001_enrichment_tables.py`.
 
-### Target websites (HTTP)
+## Data flow (batch)
 
-| Condition | Behaviour |
-|-----------|-----------|
-| DNS / connection errors | Classify retryable; exponential backoff with jitter; max attempts per settings. |
-| HTTP 4xx/5xx | Map to scrape failure; optional retry for 502/503 only. |
-| Empty or non-HTML | Terminal `partial` or `failed` with reason; never fabricate content. |
-| Rate limiting | Per-host throttle + global concurrency cap; backoff. |
+1. **POST `/enrichment/run`** creates an `enrichment_runs` row and enqueues **`process_run(run_id, names)`** via FastAPI `BackgroundTasks`.
+2. For each name: insert **`enrichment_records`** (`PENDING`), then discovery → scrape → AI → quality → update row.
+3. **Finalize run:** `succeeded_count`, `failed_count`, `total_ai_cost_usd`, terminal run status.
 
-**Circuit breaker:** After repeated failures to the **same host** or **global HTTP error burst**, short-circuit further requests for a cooldown window (see ADR 005).
+## Failure paths (summary)
 
-### OpenAI API
+| Layer | Typical outcome |
+|-------|-------------------|
+| Discovery | No HTML candidate → `ScrapeError` → record **partial**. |
+| Scrape | No pages / terminal HTTP → **partial**. |
+| Cost cap | `CostLimitExceeded` → record **failed** with cost error code. |
+| AI | Validation / API errors → **partial** (classified exceptions). |
+| Unexpected | Logged; record **failed** with `UNEXPECTED`. |
 
-| Condition | Behaviour |
-|-----------|-----------|
-| 429 / rate limit | Respect `retry-after` when present; backoff; count toward run metrics. |
-| 5xx / timeout | Retry with cap; distinguish retryable vs fatal. |
-| Invalid JSON / schema mismatch | No silent accept; retry once with repair prompt **or** mark failed with validation error logged. |
-| Cost limit | Pre-call budget check; stop new LLM calls; run status reflects `cost_limited`. |
+Retries and circuit breakers are described in ADR 005; the **current** codebase focuses on **mockable** clients and **clear** terminal states—see `docs/runbook.md` for operational detail.
 
-**Logging:** Every failure includes `correlation_id`, `company_job_id`, `pipeline_run_id`, and **no full page body**—truncated preview only.
+## Security boundaries (summary)
 
-## Security Boundaries
+| Boundary | Controls |
+|----------|----------|
+| Client → API | Pydantic validation; batch size limits (`max_length=500` companies). |
+| HTTP fetch | SSRF-oriented host checks in `WebFetchClient` (private IP / localhost patterns). |
+| Scrape → LLM | Truncated visible text; no raw HTML stored as primary artifact in the default schema—bundles store structured extraction outputs. |
 
-| Boundary | Data crossing | Controls |
-|----------|----------------|----------|
-| Client → API | Company names, batch metadata | Pydantic validation; size limits; auth optional out of scope unless added. |
-| API → HTTP fetch | Request URLs only to discovered hosts | SSRF mitigation: block private IP ranges, `file://`, redirects to internal networks (allowlist + DNS resolution checks as feasible in v1). |
-| Scrape → LLM | Public page text snippets | Truncate; strip scripts/styles; optional PII minimisation patterns; prompt injection mitigations (ADR 002). |
-| LLM → DB | Structured fields | Schema validation; store raw model output encrypted-at-rest is **out of scope** for v1; store hashes/previews per audit policy. |
+## Observability
 
-## Observability Touchpoints
+- **Middleware:** `X-Correlation-ID` propagation (`app/api/middleware/correlation.py`).
+- **Logs:** structured `extra` with correlation id and run/company context where applicable.
+- **Endpoints:** `/health`, `/health/ready`, `/metrics` (see `app/api/routes/health.py`).
 
-- **Request middleware:** `X-Correlation-ID` in and out.
-- **Logs:** JSON or structured key-value; include run/job identifiers.
-- **Metrics endpoint:** counts by status, latency percentiles, OpenAI cost aggregates, scrape success rate.
-- **Health/ready:** DB connectivity; optional OpenAI key presence check (without calling production).
+## Related documents
 
-## Related Documents
-
+- `docs/problem-definition.md`
+- `docs/runbook.md`
 - `docs/decisions/001-website-discovery-strategy.md`
 - `docs/decisions/002-ai-extraction-and-classification-approach.md`
 - `docs/decisions/003-data-quality-scoring-framework.md`

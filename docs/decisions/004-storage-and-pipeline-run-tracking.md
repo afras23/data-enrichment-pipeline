@@ -42,14 +42,25 @@ Store page HTML in S3/MinIO; DB holds pointers.
 
 ## Decision
 
-Use **Option A: PostgreSQL** as the **system of record**:
+Use **Option A: PostgreSQL** as the **system of record** (SQLite supported for dev/tests):
 
-- **`pipeline_run`:** `id`, timestamps (UTC), `status` (`pending`, `running`, `completed`, `failed`, `cost_limited`), `submitted_by` optional, aggregate counters, `total_cost_usd` (optional rollup).
-- **`company_job`:** `id`, `pipeline_run_id`, normalised `company_name`, `normalised_name_key` for dedup hints, `status`, `stage` (`discovery`, `scrape`, `enrich`, `score`), `website_url`, `discovery_confidence`, `scrape_metadata` JSONB, `enrichment_payload` JSONB (validated snapshot), `quality_breakdown` JSONB, `error_code`, `error_message` (sanitised), `prompt_version`, `model`, token counts, cost.
+- **Run table:** batch metadata, timestamps (UTC), terminal `status`, aggregate `succeeded_count` / `failed_count`, `total_ai_cost_usd`, optional `correlation_id`, `error_message` on the run when needed.
+- **Record table:** per-company rows linked to a run; `normalized_name_key`; JSON payloads for discovery metadata, scrape bundle, AI output, quality report; model telemetry and error fields.
 
-**Idempotency:** Re-submitting the **same run payload** may be rejected or returns existing `pipeline_run_id` based on a deterministic hash of (sorted names + optional batch label)—exact behaviour documented in API and implemented once to avoid duplicate charges.
+**Idempotency (policy):** Duplicate submission of the same names is **not** automatically deduplicated at the API—each `POST /enrichment/run` creates a **new** run. Callers may add idempotency keys in a future API revision if required.
 
-**Migrations:** All schema changes via **Alembic**; no raw `CREATE TABLE` in application startup.
+**Migrations:** All schema changes via **Alembic**; application code does not rely on implicit `CREATE TABLE` in production (dev may use `init_db` for SQLite demos).
+
+## Implementation (current codebase)
+
+Concrete table names and columns match migration **`001_enrichment_tables`**:
+
+| Table | Purpose |
+|-------|---------|
+| `enrichment_runs` | Batch run: `status` includes `pending`, `running`, `completed`, `failed`, `partial` (not `cost_limited` as a separate enum—cost-limited rows use record-level error codes). |
+| `enrichment_records` | Per-company: `website_url`, `website_confidence`, `discovery_metadata`, `scrape_bundle`, `ai_payload`, `quality_report`, `status`, errors, token/cost fields. |
+
+ORM models: `app/models/enrichment.py`. Repository: `app/repositories/enrichment_repository.py`.
 
 ## Consequences
 
