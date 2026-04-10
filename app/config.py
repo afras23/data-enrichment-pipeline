@@ -18,6 +18,10 @@ class Settings(BaseSettings):
     app_env: str = Field(default="development", description="development|staging|production")
     debug: bool = Field(default=False)
     log_level: str = Field(default="INFO")
+    log_json: bool = Field(
+        default=False,
+        description="Emit logs as JSON lines (structured logging for production)",
+    )
 
     api_prefix: str = Field(default="/api/v1")
 

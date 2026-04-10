@@ -14,9 +14,11 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.api.middleware.correlation import CorrelationIdMiddleware
 from app.api.routes import enrichment, health
 from app.config import settings
+from app.core.logging_config import configure_logging
 from app.db.session import engine
 from app.services.alerting import MockCompositeNotifier
 
+configure_logging()
 logger = logging.getLogger(__name__)
 
 

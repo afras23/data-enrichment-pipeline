@@ -2,6 +2,8 @@
 
 Operational notes for running, debugging, and extending the service in development or staging.
 
+**Docker Compose:** from the repo root, `docker compose up --build -d` starts PostgreSQL and the API (default host ports **8001** for HTTP and **5433** for Postgres—see `docker-compose.yml`). The API entrypoint runs **`alembic upgrade head`** before Uvicorn.
+
 ---
 
 ## Health checks

@@ -93,6 +93,21 @@ uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 
 **Makefile targets:** `make lint`, `make typecheck`, `make test`, `make evaluate`, `make migrate`.
 
+### Docker Compose
+
+```bash
+docker compose up --build -d
+```
+
+- **API:** `http://localhost:8001` → container port `8000` (host **8001** avoids clashes with other stacks).
+- **PostgreSQL:** host port **5433** → container `5432` (change in `docker-compose.yml` if needed).
+- The API container runs **`alembic upgrade head`** before **Uvicorn**. Set **`OPENAI_API_KEY`** in the environment (or a `.env` file loaded by Compose) for live enrichment; without a key, scheduled runs may end in **partial/failed** rows for AI steps.
+
+```bash
+OPENAI_API_KEY=sk-... docker compose up --build -d
+curl -s http://localhost:8001/api/v1/health
+```
+
 ---
 
 ## Configuration Guide
@@ -101,7 +116,7 @@ Environment variables are loaded via **Pydantic Settings** (see `app/config.py` 
 
 | Concern | Variables (examples) |
 |---------|----------------------|
-| App | `APP_ENV`, `DEBUG`, `LOG_LEVEL`, `API_PREFIX` |
+| App | `APP_ENV`, `DEBUG`, `LOG_LEVEL`, `LOG_JSON` (JSON log lines when `true`), `API_PREFIX` |
 | Database | `DATABASE_URL` (async URL, e.g. `postgresql+asyncpg://…` or `sqlite+aiosqlite:///…`) |
 | OpenAI | `OPENAI_API_KEY`, `OPENAI_MODEL`, `OPENAI_TIMEOUT_SECONDS`, token/temperature limits |
 | Cost | `MAX_COST_PER_RUN_USD` — **caps cumulative AI spend per batch run** (pre-check before each enrichment call) |

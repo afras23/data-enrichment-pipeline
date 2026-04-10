@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`Dockerfile`** (multi-stage wheels, non-root `appuser`, `curl` health check) and **`docker-compose.yml`** (PostgreSQL 16 + API; migrations on startup).
+- **`.dockerignore`** to slim build context.
+- **`.pre-commit-config.yaml`** (`ruff`, `ruff-format`).
+- **`app/core/logging_config.py`** with optional **`LOG_JSON=true`** JSON log lines and correlation id injection via filter.
+
 ### Documentation
 
 - Rewrote **`README.md`** as a case study (problem, solution, architecture, features, stack, run, config, API, evaluation, testing, future work).
