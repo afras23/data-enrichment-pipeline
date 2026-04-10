@@ -64,7 +64,4 @@ jobs:
 
       - name: Test
         run: |
-          pytest tests/ -v --tb=short --cov=app --cov-report=term-missing
-
-      - name: Coverage threshold
-        run: coverage report --fail-under=80
+          pytest tests/ -v --tb=short --cov=app --cov-report=term-missing --cov-fail-under=80
